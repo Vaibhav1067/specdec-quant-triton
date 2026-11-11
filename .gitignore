@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.venv/
+results/log_*.txt
+results/DONE.txt

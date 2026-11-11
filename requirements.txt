@@ -1,0 +1,6 @@
+torch>=2.4
+triton>=3.0      # Windows: triton-windows
+numpy
+pandas
+matplotlib
+tabulate
