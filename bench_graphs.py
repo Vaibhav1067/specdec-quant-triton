@@ -1,4 +1,4 @@
-"""CUDA Graph strategies for dynamic verification shapes with quantized kernels.
+﻿"""CUDA Graph strategies for dynamic verification shapes with quantized kernels.
 
 A stack of L Llama-3-8B-shaped layers (W8A8 QKV/O/gate_up/down + INT8 paged
 attention) is driven by a random trace of (batch B, draft length k).
@@ -41,7 +41,9 @@ q_buf = torch.randn(B_MAX, QL_MAX, H, D, device=dev, dtype=torch.float16)
 o_buf = torch.zeros_like(q_buf)
 plan = torch.zeros(8, dtype=torch.int32, device=dev)          # [M, B, q_len, ...]
 plan_host = torch.zeros(8, dtype=torch.int32).pin_memory()
-CFG = dict(BLOCK_M=16, BLOCK_N=64, BLOCK_K=128)
+import os
+BM = int(os.environ.get("BLOCK_M", 16))
+CFG = dict(BLOCK_M=BM, BLOCK_N=64, BLOCK_K=128)
 
 
 def step(B, ql, use_plan=False):
@@ -156,4 +158,4 @@ for B in range(1, B_MAX + 1):
         max_err = max(max_err, (o_buf[:B, :k + 1].float() - ref_o.float()).abs().max().item())
 res["plan_vs_eager_max_abs_diff"] = max_err
 print("plan vs eager max diff", max_err)
-json.dump(res, open("results/graphs.json", "w"), indent=1)
+json.dump(res, open("results/graphs.json" if BM == 16 else f"results/graphs_bm{BM}.json", "w"), indent=1)

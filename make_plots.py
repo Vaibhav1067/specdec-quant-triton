@@ -1,4 +1,4 @@
-"""Turn results/*.json into figures + summary tables (results/summary.md)."""
+﻿"""Turn results/*.json into figures + summary tables (results/summary.md)."""
 import json, os
 import numpy as np
 import pandas as pd
@@ -43,8 +43,8 @@ def at(M, col):
 md.append("\n\n## Staircase (o_proj 4096x4096), latency in us\n")
 t = []
 for col in ("w8a8_BM16", "w8a8_BM64", "w4a16_BM16", "w4a16_BM64", "fp16_cublas"):
-    t.append([col] + [f"{at(M, col):.1f}" for M in (1, 3, 9, 16, 17, 27, 32, 33, 45, 64, 72, 81, 144)])
-md.append(pd.DataFrame(t, columns=["kernel"] + [f"M={m}" for m in (1, 3, 9, 16, 17, 27, 32, 33, 45, 64, 72, 81, 144)]).to_markdown(index=False))
+    t.append([col] + [f"{at(M, col):.1f}" for M in (1, 3, 9, 16, 17, 27, 32, 33, 45, 64, 72, 80, 144)])
+md.append(pd.DataFrame(t, columns=["kernel"] + [f"M={m}" for m in (1, 3, 9, 16, 17, 27, 32, 33, 45, 64, 72, 80, 144)]).to_markdown(index=False))
 
 # ---------------- Fig 2: (B,k) grid -----------------------------------------------------
 Bdf = pd.DataFrame(mm["partB"])
@@ -99,11 +99,18 @@ R = pd.DataFrame([r for r in rg["rows"] if "error" not in r])
 E = pd.DataFrame([r for r in rg["rows"] if "error" in r])
 G = R[R.kind != "attn"].copy()
 fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
-for kind, m in (("w8a8", "o"), ("w4a16", "s")):
-    g = G[G.kind == kind]
-    sc = ax[0].scatter(g.regs, g.t_us, c=np.log2(g.BM), marker=m, cmap="viridis", s=18, label=kind)
-ax[0].set_xlabel("registers / thread"); ax[0].set_ylabel("latency us (M=72, 4096x4096)")
-ax[0].legend(); ax[0].set_title("register use vs latency (colour = log2 BLOCK_M)")
+allrows = pd.DataFrame([r for r in rg["rows"] if r["kind"] != "attn"])
+allrows["status"] = np.where(allrows.get("error").notna(), "fail", np.where(allrows.spills.fillna(0) > 0, "spill", "ok"))
+st = allrows.groupby(["kind", "BM", "status"]).size().unstack(fill_value=0)
+st = st.div(st.sum(1), axis=0) * 100
+xl = [f"{k}\nBM{int(b)}" for k, b in st.index]
+bottom = np.zeros(len(st))
+for s, c in (("ok", "C2"), ("spill", "C1"), ("fail", "C3")):
+    if s in st:
+        ax[0].bar(range(len(st)), st[s], bottom=bottom, color=c, label={"ok": "fits in registers", "spill": "spills to local mem", "fail": "OutOfResources (smem)"}[s])
+        bottom += st[s].values
+ax[0].set_xticks(range(len(st)), xl, fontsize=7); ax[0].set_ylabel("% of configs (BN x BK x warps x stages)")
+ax[0].legend(fontsize=7); ax[0].set_title("config viability by BLOCK_M")
 g = G.groupby(["kind", "BM"]).agg(regs=("regs", "median"), spills=("spills", "max"), occ=("occupancy", "median")).reset_index()
 for kind in ("w8a8", "w4a16"):
     gg = g[g.kind == kind]
@@ -168,16 +175,29 @@ md.append("\n\n## Fixed-k traces: mean step latency (ms)\n")
 md.append(pd.DataFrame(ft, columns=["k", *strat, "maxpad waste", "plan vs maxpad"]).to_markdown(index=False))
 md.append(f"\n\nplan-graph vs eager max |diff| over all (B,k): {gr['plan_vs_eager_max_abs_diff']}")
 
-fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
+g128 = json.load(open("results/graphs_bm128.json"))
+mix128 = {s: {m: np.median([r[s][m] for r in g128["mixed"]]) for m in ("p50_ms", "p99_ms", "mean_ms", "waste_pct", "tok_per_s")} for s in strat}
+tab = [[s, f"{g128.get(f'{s}_build_s', 0):.2f}" if s != "eager" else "-", f"{mix128[s]['p50_ms']:.2f}", f"{mix128[s]['p99_ms']:.2f}",
+        f"{mix128[s]['waste_pct']:.0f}%", f"{mix128[s]['tok_per_s']:.0f}", f"{mix128[s]['tok_per_s'] / mix[s]['tok_per_s']:.2f}x"] for s in strat]
+md.append("\n\n## Same experiment with BLOCK_M=128 GEMM tiles (median of 3 seeds)\n")
+md.append(pd.DataFrame(tab, columns=["strategy", "build s", "P50 ms", "P99 ms", "payload waste", "tokens/s", "vs BLOCK_M=16"]).to_markdown(index=False))
+ft = []
+for k, r in g128["fixed_k"].items():
+    ft.append([k] + [f"{r[s]['mean_ms']:.2f}" for s in strat] + [f"{r['maxpad']['waste_pct']:.0f}%", f"{100 * (r['plan']['mean_ms'] / r['maxpad']['mean_ms'] - 1):+.1f}%"])
+md.append("\n\n## BLOCK_M=128, fixed-k traces: mean step latency (ms)\n")
+md.append(pd.DataFrame(ft, columns=["k", *strat, "maxpad waste", "plan vs maxpad"]).to_markdown(index=False))
+
+fig, ax = plt.subplots(1, 2, figsize=(11, 3.6))
 x = np.arange(len(strat))
-ax[0].bar(x - .2, [mix[s]["p50_ms"] for s in strat], .4, label="P50")
-ax[0].bar(x + .2, [mix[s]["p99_ms"] for s in strat], .4, label="P99")
-ax[0].set_xticks(x, strat); ax[0].set_ylabel("ms / step"); ax[0].legend(); ax[0].set_title("mixed (B,k) trace")
+ax[0].bar(x - .2, [mix[s]["tok_per_s"] for s in strat], .4, label="GEMM BLOCK_M=16")
+ax[0].bar(x + .2, [mix128[s]["tok_per_s"] for s in strat], .4, label="GEMM BLOCK_M=128")
+ax[0].set_xticks(x, strat); ax[0].set_ylabel("verified tokens / s"); ax[0].legend(fontsize=7)
+ax[0].set_title("mixed (B,k) trace, 4 INT8 layers")
 ks = list(gr["fixed_k"].keys())
 for i, s in enumerate(strat):
     ax[1].bar(np.arange(len(ks)) + (i - 1.5) * .2, [gr["fixed_k"][k][s]["mean_ms"] for k in ks], .2, label=s)
 ax[1].set_xticks(range(len(ks)), [f"k={k}" for k in ks]); ax[1].set_ylabel("mean ms / step"); ax[1].legend(fontsize=7)
-ax[1].set_title("fixed draft length")
+ax[1].set_title("fixed draft length (BLOCK_M=16)")
 plt.tight_layout(); plt.savefig("figures/fig5_graphs.png"); plt.close()
 
 cj = json.load(open("results/correctness.json"))

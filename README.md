@@ -46,4 +46,11 @@ Hardware used: NVIDIA RTX 3050 6 GB Laptop GPU (Ampere, sm_86), PyTorch 2.11 + C
 
 ## Results
 
-See `REPORT.md` (added once benchmarks complete).
+Full analysis with data: **[REPORT.md](REPORT.md)**. Headlines (RTX 3050 Laptop):
+
+- **The cost unit is the M-tile, not the token.** Latency steps every BLOCK_M rows because each M-tile re-streams the weights (W8A8 o_proj: 116 µs at M ≤ 16 → 925 µs at M = 144 with BLOCK_M=16; flat to M = 128 with BLOCK_M=128).
+- **INT8 verification is nearly free; INT4 is not.** At B=8, k=8, W8A8 costs 1.08× a decode step and W4A16 costs 3.12×, because dequant is redone per M-tile and register pressure (2.5× W8A8's) blocks larger tiles.
+- **Fused paged attention** is 4.2× faster than per-token at k=8. With GQA group 4, k = 3 and 7 fill the tile exactly.
+- **Plan-buffer CUDA graphs** (1 graph vs 48) are bit-exact. Padding cost tracks padded *tiles*: 58% token waste costs 33% with BLOCK_M=16 but only 6–10% with BLOCK_M=128.
+
+![staircase](figures/fig1_staircase.png)
