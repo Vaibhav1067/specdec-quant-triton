@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 results/log_*.txt
 results/DONE.txt
+EMAIL_DRAFT.txt
